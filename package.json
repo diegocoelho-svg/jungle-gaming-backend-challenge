@@ -1,0 +1,42 @@
+{
+  "name": "jungle-gaming-wagering-processor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write src scripts test",
+    "format:check": "prettier --check src scripts test",
+    "lint": "oxlint src scripts test",
+    "migrate:up": "bun scripts/migrate.ts up",
+    "migrate:down": "bun scripts/migrate.ts down",
+    "queues:setup": "bun scripts/setup-queues.ts",
+    "test": "bun test test/unit",
+    "test:unit": "bun test test/unit",
+    "test:integration": "bun test test/integration",
+    "test:concurrency": "bun test test/concurrency"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sqs": "^3.1164.0",
+    "@mikro-orm/core": "^7.2.8",
+    "@mikro-orm/migrations": "^7.2.8",
+    "@mikro-orm/nestjs": "^7.1.0",
+    "@mikro-orm/postgresql": "^7.2.8",
+    "@nestjs/common": "^12.4.0",
+    "@nestjs/core": "^12.4.0",
+    "@nestjs/platform-express": "^12.4.0",
+    "pino": "^10.4.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^12.0.12",
+    "@nestjs/schematics": "^12.0.13",
+    "@types/bun": "^1.4.4",
+    "@types/express": "^5.0.6",
+    "oxlint": "^1.92.0",
+    "prettier": "^3.9.10",
+    "typescript": "^6.0.2"
+  }
+}

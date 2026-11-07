@@ -1,0 +1,126 @@
+name: wagering
+
+x-app-env: &app-env
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  DATABASE_URL: postgres://wagering:wagering@postgres:5432/wagering
+  DB_POOL_MAX: ${DB_POOL_MAX:-10}
+  AWS_REGION: us-east-1
+  AWS_ACCESS_KEY_ID: test
+  AWS_SECRET_ACCESS_KEY: test
+  SQS_ENDPOINT: http://ministack:4566
+  SQS_WAGER_QUEUE: wager-transactions.fifo
+  SQS_WAGER_DLQ: wager-transactions-dlq.fifo
+  SQS_EVENTS_QUEUE: wagering-events.fifo
+  SQS_MAX_RECEIVE_COUNT: "5"
+
+x-app: &app
+  build:
+    context: .
+    target: runtime
+  image: wagering-app
+  environment: *app-env
+  restart: unless-stopped
+  stop_grace_period: 30s
+  depends_on:
+    postgres:
+      condition: service_healthy
+    ministack:
+      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
+    setup-queues:
+      condition: service_completed_successfully
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: wagering
+      POSTGRES_PASSWORD: wagering
+      POSTGRES_DB: wagering
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wagering -d wagering_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  ministack:
+    image: ministackorg/ministack:1.5.38
+    ports:
+      - "${SQS_PORT:-4566}:4566"
+
+  migrate:
+    build:
+      context: .
+      target: runtime
+    image: wagering-app
+    command: ["bun", "scripts/migrate.ts", "up"]
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  setup-queues:
+    build:
+      context: .
+      target: runtime
+    image: wagering-app
+    command: ["bun", "scripts/setup-queues.ts"]
+    environment: *app-env
+    depends_on:
+      ministack:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    environment:
+      <<: *app-env
+      APP_ROLE: api
+      PORT: "3000"
+    ports:
+      - "${API_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r = await fetch('http://localhost:3000/health/live'); process.exit(r.ok ? 0 : 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  consumer:
+    <<: *app
+    environment:
+      <<: *app-env
+      APP_ROLE: consumer
+
+  workers:
+    <<: *app
+    environment:
+      <<: *app-env
+      APP_ROLE: workers
+
+  test:
+    profiles: ["test"]
+    build:
+      context: .
+      target: test
+    image: wagering-test
+    environment:
+      <<: *app-env
+      APP_ROLE: api
+      LOG_LEVEL: silent
+      DATABASE_URL: postgres://wagering:wagering@postgres:5432/wagering_test
+      SQS_WAGER_QUEUE: test-wager-transactions.fifo
+      SQS_WAGER_DLQ: test-wager-transactions-dlq.fifo
+      SQS_EVENTS_QUEUE: test-wagering-events.fifo
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ministack:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
