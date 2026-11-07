@@ -20,7 +20,7 @@ export class CoreModule implements OnApplicationShutdown {
   static forRoot(env: Env): DynamicModule {
     return {
       module: CoreModule,
-      imports: [MikroOrmModule.forRoot(buildOrmConfig(env))],
+      imports: [MikroOrmModule.forRoot({ ...buildOrmConfig(env), autoLoadEntities: true })],
       providers: [
         { provide: ENV, useValue: env },
         { provide: LOGGER, useValue: createLogger({ level: env.logLevel, role: env.appRole }) },

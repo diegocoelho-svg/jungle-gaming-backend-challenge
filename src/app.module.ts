@@ -4,6 +4,7 @@ import { ConsumerModule } from "./roles/consumer.module";
 import { CoreModule } from "./core/core.module";
 import { WorkersModule } from "./roles/workers.module";
 import type { AppRole, Env } from "./core/config/env";
+import { WageringModule } from "./wagering/wagering.module";
 
 const ROLE_MODULES: Record<AppRole, new () => unknown> = {
   api: ApiModule,
@@ -16,7 +17,7 @@ export class AppModule {
   static forRoot(env: Env): DynamicModule {
     return {
       module: AppModule,
-      imports: [CoreModule.forRoot(env), ROLE_MODULES[env.appRole]],
+      imports: [CoreModule.forRoot(env), WageringModule, ROLE_MODULES[env.appRole]],
     };
   }
 }
