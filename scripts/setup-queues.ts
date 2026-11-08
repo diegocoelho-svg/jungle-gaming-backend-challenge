@@ -1,11 +1,11 @@
 import { CreateQueueCommand, GetQueueAttributesCommand } from "@aws-sdk/client-sqs";
-import { loadEnv } from "../src/core/config/env";
+import { loadEnv, QUEUE_VISIBILITY_TIMEOUT_MS } from "../src/core/config/env";
 import { createSqsClient } from "../src/core/messaging/sqs.client";
 
 const env = loadEnv({ ...process.env, APP_ROLE: "api" });
 const sqs = createSqsClient(env);
 
-const VISIBILITY_TIMEOUT_SECONDS = "30";
+const VISIBILITY_TIMEOUT_SECONDS = String(QUEUE_VISIBILITY_TIMEOUT_MS / 1_000);
 
 const createFifoQueue = async (name: string, attributes: Record<string, string> = {}): Promise<string> => {
   const { QueueUrl } = await sqs.send(

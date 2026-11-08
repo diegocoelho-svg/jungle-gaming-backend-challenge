@@ -26,6 +26,14 @@ describe("loadEnv", () => {
     expect(loadEnv({ ...valid, APP_ROLE: role }).appRole).toBe(role as never);
   });
 
+  test("keeps the visibility heartbeat below the queue visibility timeout", () => {
+    expect(loadEnv(valid).sqs.visibilityHeartbeatMs).toBe(10_000);
+    expect(loadEnv({ ...valid, SQS_VISIBILITY_HEARTBEAT_MS: "20000" }).sqs.visibilityHeartbeatMs).toBe(20_000);
+    expect(loadEnv({ ...valid, SQS_VISIBILITY_HEARTBEAT_MS: "100" }).sqs.visibilityHeartbeatMs).toBe(100);
+    expect(() => loadEnv({ ...valid, SQS_VISIBILITY_HEARTBEAT_MS: "20001" })).toThrow(InvalidEnvError);
+    expect(() => loadEnv({ ...valid, SQS_VISIBILITY_HEARTBEAT_MS: "99" })).toThrow(InvalidEnvError);
+  });
+
   test("rejects an unknown role", () => {
     expect(() => loadEnv({ ...valid, APP_ROLE: "admin" })).toThrow(InvalidEnvError);
   });

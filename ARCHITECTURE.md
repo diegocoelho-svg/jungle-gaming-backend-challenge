@@ -30,7 +30,7 @@ One Docker image runs in three roles, selected by `APP_ROLE`:
 | Role | Responsibility | Status |
 |---|---|---|
 | `api` | HTTP API: wallets, transaction submission, queries, reconciliation, health and metrics | implemented |
-| `consumer` | Consumes `wager-transactions.fifo` and settles each message | planned |
+| `consumer` | Consumes `wager-transactions.fifo` and settles each message | implemented |
 | `workers` | Publishes the outbox to `wagering-events.fifo` and retries `PENDING_REFERENCE` transactions | planned |
 
 Each role boots only the Nest modules it needs. HTTP and queue submissions share the same use case (`ProcessWagerTransactionUseCase`) and the same settlement step; they differ only in how duplicates are detected before it.
@@ -259,22 +259,42 @@ The publisher (planned) reads due rows in small batches with `FOR UPDATE SKIP LO
 
 Queue messages are recorded in `inbox_messages`, keyed by `(consumer_name, message_id)` and storing the message's payload hash, in the same transaction as the settlement (implemented in `executeFromMessage`):
 
-- `INSERT ... ON CONFLICT DO NOTHING`. If nothing was inserted, the message id was already processed, and the stored payload hash is returned to the caller.
+- The inbox stores the same business payload hash as the transaction (section 4), computed by the use case.
+- `INSERT ... ON CONFLICT DO NOTHING`. If nothing was inserted, the message id was already processed, and the use case reports whether the stored hash matches the new one.
 - If settlement fails, the inbox row rolls back with it and the message can be redelivered.
 - An idempotency conflict is a terminal outcome: the inbox row is kept so the message is not reprocessed forever.
 
-The consumer (planned) acknowledges a message only after the commit and handles each outcome as follows:
+### Queues
+
+All queues are FIFO and are created by `scripts/setup-queues.ts`.
+
+| Queue | Role | Settings |
+|---|---|---|
+| `wager-transactions.fifo` | input, defined by the challenge | visibility 30 s; redrive to the DLQ after 5 receives (`SQS_MAX_RECEIVE_COUNT`) |
+| `wager-transactions-dlq.fifo` | dead letters, defined by the challenge | no consumer; kept for inspection and replay |
+| `wagering-events.fifo` | integration events; the challenge names no destination, so this queue is a choice of this project | group `aggregateId`, deduplication `eventId` |
+
+- `MessageGroupId = walletId` on the input, because the wallet is the unit of concurrency (section 5).
+- FIFO ordering and the 5-minute deduplication window are treated as optimizations. Duplicates, reordering and redelivery are still expected: the inbox, the unique indexes and the wallet lock keep the result correct without them.
+
+### Consumer
+
+`WagerTransactionsConsumer` validates the `WagerTransactionRequested` envelope with the HTTP parser (`data.idempotencyKey` replaces the header), calls `executeFromMessage` and acknowledges **only after the commit**.
 
 | Outcome | Handling |
 |---|---|
-| Settled (including `REJECTED` and `PENDING_REFERENCE`) | commit, then ack |
-| Same `messageId`, same payload hash | ack (redelivery) |
-| Same `messageId`, different payload hash | send to the DLQ: the message id was reused for different content |
-| Idempotency conflict | ack, with the inbox row and a metric |
-| Malformed message, unknown wallet | send to the DLQ |
-| Transient failure | rollback, retry through visibility timeout, DLQ after 5 receives |
+| Settled (including `REJECTED` and `PENDING_REFERENCE`), redelivery with the same hash, idempotency conflict | ack |
+| Same `messageId`, different payload hash | DLQ, `MESSAGE_ID_REUSED` |
+| Malformed message, invalid command (e.g. `OPENING`), domain validation error | DLQ, `INVALID_MESSAGE` |
+| Unknown wallet | DLQ, `WALLET_NOT_FOUND` |
+| Transient or unexpected failure | no ack; visibility set to `min(300, 2 × 2^(receiveCount − 1))` s; SQS redrives to the DLQ after 5 receives |
 
-A process killed after commit and before the ack receives the message again, finds it in the inbox with the same hash and only acknowledges it. A process killed before commit left nothing behind, and the redelivery is processed normally. `MessageGroupId = walletId` reduces contention per wallet but is not relied on for correctness. On `SIGTERM` the consumer stops receiving, finishes the messages in flight and returns the rest with visibility 0.
+Permanent failures skip the receive limit because retrying cannot fix them; the reason travels as a message attribute.
+
+- **Ordering.** Producers use `MessageGroupId = walletId`. Groups in a batch run concurrently, messages of a group in order; on a retry the rest of the group is released, so FIFO keeps the group blocked. This is an optimization, not a guarantee.
+- **Visibility.** While a batch is open, unfinished messages are extended to 30 s every `SQS_VISIBILITY_HEARTBEAT_MS` (default 10 s, allowed 0.1–20 s to leave room for the SQS call). Updates are serialized per message and stop once its outcome is decided, so an extension never overrides a retry delay.
+- **Crash between commit and ack.** The redelivery finds the inbox row with the same hash and is only acknowledged.
+- **Shutdown.** On `SIGTERM` the consumer stops polling, lets the current 3 s long poll return (aborting it could let SQS hand messages to a dead request), finishes messages in progress and releases the rest with visibility 0. Compose allows 30 s.
 
 ## 8. Database guarantees
 
@@ -381,7 +401,7 @@ API: check route scope and token provider_id against the payload
 ## 13. Testing strategy
 
 - **Unit tests** cover the domain (`Money`, settlement rules, payload hash, entities, events, architecture boundaries) and the use-case race paths with a stub unit of work.
-- **Integration tests** run against **real PostgreSQL and SQS** (MiniStack). They cover the API, the inbox, the schema constraints and triggers, and atomicity (a broken outbox table must roll back the whole settlement).
+- **Integration tests** run against **real PostgreSQL and SQS** (MiniStack). They cover the API, the inbox, the schema constraints and triggers, atomicity (a broken outbox table must roll back the whole settlement) and the consumer: ack after commit, redelivery, HTTP and queue submissions of the same transaction, business rejections, permanent failures sent to the DLQ, transient failures retried with backoff, redrive to the DLQ after the receive limit, and `SIGTERM` with messages in flight (nothing lost or duplicated).
 - **Concurrency tests** run against the real database:
   - 50 identical requests debit once;
   - the mandatory scenario (balance `100.00`, two simultaneous `80.00` bets) always ends with one processed and one rejected transaction and a balance of `20.00`;
@@ -392,11 +412,10 @@ API: check route scope and token provider_id against the payload
 
 ## 14. Current status and limitations
 
-Implemented: domain, schema and migrations, HTTP API, settlement with idempotency and locking, inbox claim inside the settlement transaction, outbox writes, reconciliation, health and metrics.
+Implemented: domain, schema and migrations, HTTP API, SQS consumer (ack after commit, DLQ, retry with backoff, graceful shutdown), settlement with idempotency and locking, inbox inside the settlement transaction, outbox writes, reconciliation, health and metrics.
 
 In progress:
 
-- SQS consumer (ack after commit, outcome handling above, retry, DLQ, graceful shutdown on `SIGTERM`);
 - outbox publisher and `PENDING_REFERENCE` retry worker;
 - failure tests with three or more processes, including a process killed between commit and ack;
 - remaining metrics (transactions by status, duplicates, retries, DLQ, lock conflicts, outbox lag, latency).

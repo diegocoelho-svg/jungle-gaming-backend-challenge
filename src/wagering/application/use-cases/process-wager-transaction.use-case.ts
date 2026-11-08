@@ -36,9 +36,15 @@ export interface WagerTransactionOutcome {
   idempotentReplay: boolean;
 }
 
+export interface MessageDelivery {
+  consumerName: string;
+  messageId: string;
+  receivedAt: Date;
+}
+
 export type MessageOutcome =
   | { kind: "settled"; outcome: WagerTransactionOutcome }
-  | { kind: "duplicate-message"; storedPayloadHash: string }
+  | { kind: "duplicate-message"; samePayload: boolean }
   | { kind: "idempotency-conflict"; reason: string };
 
 const MAX_ATTEMPTS = 3;
@@ -72,15 +78,15 @@ export class ProcessWagerTransactionUseCase {
   async executeFromMessage(
     command: ProcessWagerTransactionCommand,
     correlation: CorrelationContext,
-    inbox: InboxMessage,
+    delivery: MessageDelivery,
   ): Promise<MessageOutcome> {
     const { money, payloadHash } = this.prepare(command);
 
     return this.withRetries(command, () =>
       this.unitOfWork.transaction(async (repositories): Promise<MessageOutcome> => {
-        const processed = InboxMessage.rehydrate({ ...inbox, processedAt: this.clock.now() });
+        const processed = InboxMessage.rehydrate({ ...delivery, payloadHash, processedAt: this.clock.now() });
         const claim = await repositories.inbox.claim(processed);
-        if (!claim.claimed) return { kind: "duplicate-message", storedPayloadHash: claim.payloadHash };
+        if (!claim.claimed) return { kind: "duplicate-message", samePayload: claim.payloadHash === payloadHash };
 
         try {
           const outcome =

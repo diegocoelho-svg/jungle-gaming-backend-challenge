@@ -18,6 +18,7 @@ export interface Env {
     wagerDlq: string;
     eventsQueue: string;
     maxReceiveCount: number;
+    visibilityHeartbeatMs: number;
   };
 }
 
@@ -27,6 +28,11 @@ export class InvalidEnvError extends Error {
     this.name = "InvalidEnvError";
   }
 }
+
+export const QUEUE_VISIBILITY_TIMEOUT_MS = 30_000;
+export const SQS_REQUEST_TIMEOUT_MS = 5_000;
+export const MIN_VISIBILITY_HEARTBEAT_MS = 100;
+export const MAX_VISIBILITY_HEARTBEAT_MS = QUEUE_VISIBILITY_TIMEOUT_MS - 2 * SQS_REQUEST_TIMEOUT_MS;
 
 const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace", "silent"];
 
@@ -80,8 +86,16 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
       wagerDlq: required("SQS_WAGER_DLQ"),
       eventsQueue: required("SQS_EVENTS_QUEUE"),
       maxReceiveCount: positiveInt("SQS_MAX_RECEIVE_COUNT", 5),
+      visibilityHeartbeatMs: positiveInt("SQS_VISIBILITY_HEARTBEAT_MS", 10_000),
     },
   };
+
+  const heartbeat = env.sqs.visibilityHeartbeatMs;
+  if (heartbeat < MIN_VISIBILITY_HEARTBEAT_MS || heartbeat > MAX_VISIBILITY_HEARTBEAT_MS) {
+    problems.push(
+      `SQS_VISIBILITY_HEARTBEAT_MS must be between ${MIN_VISIBILITY_HEARTBEAT_MS} and ${MAX_VISIBILITY_HEARTBEAT_MS} ms, leaving room for the SQS call before the ${QUEUE_VISIBILITY_TIMEOUT_MS} ms visibility timeout`,
+    );
+  }
 
   if (problems.length > 0) throw new InvalidEnvError(problems);
   return env;

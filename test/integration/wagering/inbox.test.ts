@@ -6,7 +6,6 @@ import {
   type ProcessWagerTransactionCommand,
   ProcessWagerTransactionUseCase,
 } from "../../../src/wagering/application/use-cases/process-wager-transaction.use-case";
-import { InboxMessage } from "../../../src/wagering/domain/entities/inbox-message.entity";
 import { WagerTransactionKind } from "../../../src/wagering/domain/entities/wager-transaction.entity";
 import { createWallet, startTestApi, type TestApi } from "../../support/api";
 import { id } from "../../support/database";
@@ -29,8 +28,7 @@ afterAll(async () => {
 
 const correlation = { correlationId: "corr-1", causationId: "msg" };
 
-const inboxFor = (messageId: string, payloadHash = "a".repeat(64)) =>
-  InboxMessage.receive({ consumerName: "wager-transactions", messageId, payloadHash, receivedAt: new Date() });
+const inboxFor = (messageId: string) => ({ consumerName: "wager-transactions", messageId, receivedAt: new Date() });
 
 const commandFor = (wallet: { id: string; playerId: string }, amount = "10.00"): ProcessWagerTransactionCommand => {
   const externalTransactionId = id();
@@ -74,8 +72,35 @@ describe("processing from a queue message", () => {
     await useCase.executeFromMessage(command, correlation, inboxFor(messageId));
     const redelivery = await useCase.executeFromMessage(command, correlation, inboxFor(messageId));
 
-    expect(redelivery).toEqual({ kind: "duplicate-message", storedPayloadHash: "a".repeat(64) });
+    expect(redelivery).toEqual({ kind: "duplicate-message", samePayload: true });
     expect(await count("wager_transactions", "wallet_id = ? and kind = 'BET'", [wallet.id])).toBe(1);
+  });
+
+  test("a reused message id with different content is reported as a different payload", async () => {
+    const wallet = await createWallet(api, "100.00");
+    const messageId = id();
+
+    await useCase.executeFromMessage(commandFor(wallet), correlation, inboxFor(messageId));
+    const reused = await useCase.executeFromMessage(commandFor(wallet), correlation, inboxFor(messageId));
+
+    expect(reused).toEqual({ kind: "duplicate-message", samePayload: false });
+    expect(await count("wager_transactions", "wallet_id = ? and kind = 'BET'", [wallet.id])).toBe(1);
+  });
+
+  test("the inbox stores the business payload hash of the transaction", async () => {
+    const wallet = await createWallet(api, "100.00");
+    const messageId = id();
+    const command = commandFor(wallet);
+
+    await useCase.executeFromMessage(command, correlation, inboxFor(messageId));
+
+    expect(
+      await count(
+        "inbox_messages i join wager_transactions t on t.payload_hash = i.payload_hash",
+        "i.message_id = ? and t.external_transaction_id = ?",
+        [messageId, command.externalTransactionId],
+      ),
+    ).toBe(1);
   });
 
   test("the same message delivered concurrently settles once", async () => {
