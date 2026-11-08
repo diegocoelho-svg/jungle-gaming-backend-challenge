@@ -4,6 +4,7 @@ import { type DynamicModule, Global, Inject, Module, type OnApplicationShutdown 
 import type { Env } from "./config/env";
 import { createSqsClient, SQS_CLIENT } from "./messaging/sqs.client";
 import { createLogger, type Logger } from "./observability/logger";
+import { createMetricsRegistry, METRICS_REGISTRY } from "./observability/metrics";
 import { buildOrmConfig } from "./persistence/orm.config";
 
 export const ENV = Symbol("ENV");
@@ -25,8 +26,9 @@ export class CoreModule implements OnApplicationShutdown {
         { provide: ENV, useValue: env },
         { provide: LOGGER, useValue: createLogger({ level: env.logLevel, role: env.appRole }) },
         { provide: SQS_CLIENT, useValue: createSqsClient(env) },
+        { provide: METRICS_REGISTRY, useValue: createMetricsRegistry(env.appRole) },
       ],
-      exports: [ENV, LOGGER, SQS_CLIENT],
+      exports: [ENV, LOGGER, SQS_CLIENT, METRICS_REGISTRY],
     };
   }
 
