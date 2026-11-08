@@ -6,6 +6,7 @@ import type {
   LedgerRepository,
   LedgerSummary,
   OutboxRepository,
+  PendingReferenceClaim,
   TransactionOptions,
   WageringRepositories,
   WageringUnitOfWork,
@@ -22,10 +23,11 @@ import {
 import type { WalletLedgerEntry } from "../../domain/entities/wallet-ledger-entry.entity";
 import type { Wallet } from "../../domain/entities/wallet.entity";
 import { constraintOf, isTransientDatabaseFailure, isUniqueViolation } from "./database-errors";
-import { outboxMessageToSchema } from "./mappers/message.mapper";
+import { outboxMessageToDomain, outboxMessageToSchema } from "./mappers/message.mapper";
 import { ledgerEntryToDomain, ledgerEntryToSchema } from "./mappers/wallet-ledger-entry.mapper";
 import { walletToDomain, walletToSchema } from "./mappers/wallet.mapper";
 import { wagerTransactionToDomain, wagerTransactionToSchema } from "./mappers/wager-transaction.mapper";
+import { OutboxMessageSchema } from "./schemas/outbox-message.schema";
 import { WagerTransactionSchema } from "./schemas/wager-transaction.schema";
 import { WalletLedgerEntrySchema } from "./schemas/wallet-ledger-entry.schema";
 import { WalletSchema } from "./schemas/wallet.schema";
@@ -88,6 +90,21 @@ class MikroOrmWagerTransactionRepository implements WagerTransactionRepository {
     return count > 0;
   }
 
+  async claimNextDuePendingReference(now: Date): Promise<PendingReferenceClaim | undefined> {
+    const [row] = await this.em.getConnection().execute<{ id: string; wallet_id: string }[]>(
+      `select id, wallet_id
+         from wager_transactions
+        where status = 'PENDING_REFERENCE' and next_reference_attempt_at <= ?
+        order by next_reference_attempt_at
+        limit 1
+          for update skip locked`,
+      [now],
+      "all",
+      this.em.getTransactionContext(),
+    );
+    return row && { transactionId: row.id, walletId: row.wallet_id };
+  }
+
   add(transaction: WagerTransaction): void {
     this.em.persist(wagerTransactionToSchema(transaction));
   }
@@ -136,10 +153,28 @@ class MikroOrmLedgerRepository implements LedgerRepository {
 }
 
 class MikroOrmOutboxRepository implements OutboxRepository {
+  private readonly rows = new Map<string, OutboxMessageSchema>();
+
   constructor(private readonly em: EntityManager) {}
 
   enqueue(message: OutboxMessage): void {
     this.em.persist(outboxMessageToSchema(message));
+  }
+
+  async claimDue(now: Date, limit: number): Promise<OutboxMessage[]> {
+    const rows = await this.em.find(
+      OutboxMessageSchema,
+      { publishedAt: null, $or: [{ nextAttemptAt: null }, { nextAttemptAt: { $lte: now } }] },
+      { orderBy: { occurredAt: "asc", id: "asc" }, limit, lockMode: LockMode.PESSIMISTIC_PARTIAL_WRITE },
+    );
+    for (const row of rows) this.rows.set(row.id, row);
+    return rows.map(outboxMessageToDomain);
+  }
+
+  save(message: OutboxMessage): void {
+    const row = this.rows.get(message.id);
+    if (!row) throw new Error(`Outbox message ${message.id} was not loaded in this unit of work`);
+    outboxMessageToSchema(message, row);
   }
 }
 

@@ -13,11 +13,17 @@ export interface WalletRepository {
   save(wallet: Wallet): void;
 }
 
+export interface PendingReferenceClaim {
+  transactionId: string;
+  walletId: string;
+}
+
 export interface WagerTransactionRepository {
   findById(transactionId: string): Promise<WagerTransaction | undefined>;
   findByIdempotencyKey(providerId: string, idempotencyKey: string): Promise<WagerTransaction | undefined>;
   findByExternalId(providerId: string, externalTransactionId: string): Promise<WagerTransaction | undefined>;
   hasProcessedReversal(referenceTransactionId: string): Promise<boolean>;
+  claimNextDuePendingReference(now: Date): Promise<PendingReferenceClaim | undefined>;
   add(transaction: WagerTransaction): void;
   save(transaction: WagerTransaction): void;
 }
@@ -35,6 +41,8 @@ export interface LedgerRepository {
 
 export interface OutboxRepository {
   enqueue(message: OutboxMessage): void;
+  claimDue(now: Date, limit: number): Promise<OutboxMessage[]>;
+  save(message: OutboxMessage): void;
 }
 
 export type InboxClaim = { claimed: true } | { claimed: false; payloadHash: string };

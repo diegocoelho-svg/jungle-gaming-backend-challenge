@@ -31,7 +31,7 @@ One Docker image runs in three roles, selected by `APP_ROLE`:
 |---|---|---|
 | `api` | HTTP API: wallets, transaction submission, queries, reconciliation, health and metrics | implemented |
 | `consumer` | Consumes `wager-transactions.fifo` and settles each message | implemented |
-| `workers` | Publishes the outbox to `wagering-events.fifo` and retries `PENDING_REFERENCE` transactions | planned |
+| `workers` | Publishes the outbox to `wagering-events.fifo` and retries `PENDING_REFERENCE` transactions | implemented |
 
 Each role boots only the Nest modules it needs. HTTP and queue submissions share the same use case (`ProcessWagerTransactionUseCase`) and the same settlement step; they differ only in how duplicates are detected before it.
 
@@ -191,7 +191,7 @@ PENDING_REFERENCE ──► PROCESSED | REJECTED | FAILED
 
 - `PENDING` exists only in memory: the decision is taken in the same transaction that inserts the row, so a stored row is always in one of the other states.
 - `PROCESSED`, `REJECTED` and `FAILED` are terminal. The domain refuses further transitions, and the `wager_transactions_guard` trigger rejects updates to terminal rows, updates to identity fields and deletes.
-- `FAILED` is reserved for the pending-reference worker (a non-business failure while resolving a reference). A recognized transient failure on the request path (lock timeout, deadlock, serialization, connection loss) is answered as `503`, any other unexpected error as `500`, and neither is stored as `FAILED`, so a temporary outage does not become a permanent outcome.
+- `FAILED` (with `INFRASTRUCTURE_FAILURE`) is supported by the domain, the schema and the HTTP mapping, but no path produces it in this version. A recognized transient failure on the request path (lock timeout, deadlock, serialization, connection loss) is answered as `503`, any other unexpected error as `500`, and neither is stored as `FAILED`, so a temporary outage does not become a permanent outcome.
 
 ### Kinds
 
@@ -219,7 +219,7 @@ Amounts must be greater than zero, except `LOSS`, which accepts `0.00`. `WIN` an
 
 When the reference does not exist yet, the transaction is stored as `PENDING_REFERENCE` (HTTP `202`) without moving the balance, with `next_reference_attempt_at` scheduled. Rejecting immediately would lose a legitimate reversal that simply arrived early, and holding the message in a FIFO queue would block the rest of its group.
 
-The retry worker (planned) claims due rows with `FOR UPDATE SKIP LOCKED` in a short transaction and settles each one in another transaction that locks the wallet first, the same lock order as the main path, to avoid deadlocks. Backoff is exponential from 5 seconds, capped at 5 minutes, for up to 12 attempts (about 35 minutes in total). That window covers normal provider retries and queue redelivery delays, while keeping the player's balance from waiting indefinitely. After the last attempt the transaction becomes `REJECTED` with `REFERENCE_NOT_FOUND` and the corresponding event is published.
+The retry worker settles one due row per transaction: it claims the row with `FOR UPDATE SKIP LOCKED`, locks the wallet, rechecks the status and settles. The row stays locked until commit, so two workers never hold the same row and a crashed worker releases it at once, without a lease to expire. The main path never locks pending rows, so this order cannot deadlock with it. Backoff is exponential from 5 seconds, capped at 5 minutes, for up to 12 attempts (about 35 minutes in total). That window covers normal provider retries and queue redelivery delays, while keeping the player's balance from waiting indefinitely. A retry that still finds no reference only reschedules the row and emits no event. After the last attempt the transaction becomes `REJECTED` with `REFERENCE_NOT_FOUND` and `WagerTransactionRejected` is published. Events emitted by the worker use the transaction id as `correlationId` and `causationId`, since the original request context is no longer available.
 
 ### Failure codes
 
@@ -253,7 +253,7 @@ Events are rows in `outbox_messages`, written in the **same transaction** as the
 
 Events: `WagerTransactionProcessed`, `WagerTransactionRejected`, `WagerTransactionPendingReference` and `WalletBalanceChanged` (whenever there is a ledger entry). Payloads carry `MoneyProps`, never `Money` instances, plus `correlationId` and `causationId`.
 
-The publisher (planned) reads due rows in small batches with `FOR UPDATE SKIP LOCKED`, so several instances share the work without sending the same row at the same time, and a crashed instance releases its rows without a lease to expire. Delivery is **at least once**: a publisher that crashes after sending and before marking the row publishes it again, so consumers deduplicate by event id. Publishing never gives up, because dropping an event loses information; the backoff is capped and outbox lag is exposed as a metric. Ordering between events is not guaranteed, so consumers use `walletVersion`.
+The publisher claims up to 50 due rows with `FOR UPDATE SKIP LOCKED`, sends them with `SendMessageBatch` and marks them in the same transaction, so several instances share the work without sending the same row at the same time, and a crashed instance releases its rows without a lease to expire. A failed send keeps the row and schedules a retry from the time the send returned (1 s doubling, capped at 5 minutes). Delivery is **at least once**: a publisher that crashes after sending and before marking the row publishes it again, so consumers deduplicate by event id. The FIFO deduplication id is the event id, so a resend within 5 minutes is dropped by SQS as well. Publishing never gives up, because dropping an event loses information. Ordering between events is not guaranteed; `WalletBalanceChanged` carries `walletVersion` so consumers can order balance changes.
 
 ### Inbox
 
@@ -272,7 +272,7 @@ All queues are FIFO and are created by `scripts/setup-queues.ts`.
 |---|---|---|
 | `wager-transactions.fifo` | input, defined by the challenge | visibility 30 s; redrive to the DLQ after 5 receives (`SQS_MAX_RECEIVE_COUNT`) |
 | `wager-transactions-dlq.fifo` | dead letters, defined by the challenge | no consumer; kept for inspection and replay |
-| `wagering-events.fifo` | integration events; the challenge names no destination, so this queue is a choice of this project | group `aggregateId`, deduplication `eventId` |
+| `wagering-events.fifo` | integration events; the challenge names no destination, so this queue is a choice of this project | group `aggregateId` (the wallet id), deduplication `eventId` |
 
 - `MessageGroupId = walletId` on the input, because the wallet is the unit of concurrency (section 5).
 - FIFO ordering and the 5-minute deduplication window are treated as optimizations. Duplicates, reordering and redelivery are still expected: the inbox, the unique indexes and the wallet lock keep the result correct without them.
@@ -401,7 +401,7 @@ API: check route scope and token provider_id against the payload
 ## 13. Testing strategy
 
 - **Unit tests** cover the domain (`Money`, settlement rules, payload hash, entities, events, architecture boundaries) and the use-case race paths with a stub unit of work.
-- **Integration tests** run against **real PostgreSQL and SQS** (MiniStack). They cover the API, the inbox, the schema constraints and triggers, atomicity (a broken outbox table must roll back the whole settlement) and the consumer: ack after commit, redelivery, HTTP and queue submissions of the same transaction, business rejections, permanent failures sent to the DLQ, transient failures retried with backoff, redrive to the DLQ after the receive limit, and `SIGTERM` with messages in flight (nothing lost or duplicated).
+- **Integration tests** run against **real PostgreSQL and SQS** (MiniStack). They cover the API, the inbox, the schema constraints and triggers, atomicity (a broken outbox table must roll back the whole settlement) and the consumer: ack after commit, redelivery, HTTP and queue submissions of the same transaction, business rejections, permanent failures sent to the DLQ, transient failures retried with backoff, redrive to the DLQ after the receive limit, and `SIGTERM` with messages in flight (nothing lost or duplicated). Worker tests cover two publishers on the same outbox, failed sends, a publisher that dies before committing, duplicate sends, a reversal that arrives before its reference, rescheduling, the attempt limit, two pending refunds of one bet, and resolution racing new bets on the same wallet.
 - **Concurrency tests** run against the real database:
   - 50 identical requests debit once;
   - the mandatory scenario (balance `100.00`, two simultaneous `80.00` bets) always ends with one processed and one rejected transaction and a balance of `20.00`;
@@ -412,11 +412,10 @@ API: check route scope and token provider_id against the payload
 
 ## 14. Current status and limitations
 
-Implemented: domain, schema and migrations, HTTP API, SQS consumer (ack after commit, DLQ, retry with backoff, graceful shutdown), settlement with idempotency and locking, inbox inside the settlement transaction, outbox writes, reconciliation, health and metrics.
+Implemented: domain, schema and migrations, HTTP API, SQS consumer (ack after commit, DLQ, retry with backoff, graceful shutdown), outbox publisher, `PENDING_REFERENCE` retry worker, settlement with idempotency and locking, inbox inside the settlement transaction, reconciliation, health and metrics.
 
 In progress:
 
-- outbox publisher and `PENDING_REFERENCE` retry worker;
 - failure tests with three or more processes, including a process killed between commit and ack;
 - remaining metrics (transactions by status, duplicates, retries, DLQ, lock conflicts, outbox lag, latency).
 
@@ -425,4 +424,5 @@ Known limitations:
 - A single hot wallet is bounded by sequential processing on one row. This is inherent to a consistent balance.
 - Authentication is a pass-through placeholder (design in section 11).
 - A `BET` stays `PROCESSED` after a `WIN`, so it can still be reversed: in `BET 10`, `WIN 50`, `REFUND 10` the player keeps the prize and gets the stake back. The challenge does not cover this case and the literal rules allow it; keeping the sequence coherent is the provider's responsibility. Blocking it would be a new reference rule with its own failure code.
+- A pending reference that keeps hitting an unexpected (non-transient) error is retried on every worker cycle and logged; it is never moved to `FAILED`. Marking it `FAILED` after a number of consecutive errors would need an error counter on the row.
 - Partial reversals and currency conversion are out of scope.
