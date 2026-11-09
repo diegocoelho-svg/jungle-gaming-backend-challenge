@@ -6,7 +6,7 @@ Design decisions, trade-offs and limitations are in [ARCHITECTURE.md](ARCHITECTU
 
 ## Stack
 
-Bun 1.x, TypeScript (strict), NestJS, PostgreSQL 17, AWS SQS through MiniStack, MikroORM 7, Docker Compose.
+Bun 1.x, TypeScript (strict), NestJS, PostgreSQL 17, AWS SQS through MiniStack, MikroORM 7, Zod, Docker Compose.
 
 ## Running
 

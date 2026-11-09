@@ -54,10 +54,10 @@ unique violation -> retry the unit of work
 | `domain` | `Money`, entities, `settleTransaction`, `computePayloadHash`, events | nothing |
 | `application` | use cases, ports (unit of work, publisher, metrics, clock, ids), errors | `domain` |
 | `infrastructure` | MikroORM unit of work, schemas, mappers, SQS publisher, Prometheus | inner layers |
-| `presentation` | controllers, consumer, workers, parsers, error mapping | inner layers |
+| `presentation` | controllers, consumer, workers, zod request schemas, error mapping | inner layers |
 
 - The domain imports no Nest, ORM or decorators; `test/unit/wagering/architecture.test.ts` enforces it.
-- Creation factories validate (`WagerTransaction.create`, `Wallet.open`, `Money.from`); `rehydrate` rebuilds stored state.
+- Validation has two levels. Zod schemas at the edge check shape: required fields, string types, length, control characters, UUIDs, kinds, and report every problem at once. Business rules live in the creation factories (`WagerTransaction.create`, `Wallet.open`, `Money.from`, which enforces exactly two decimals), so HTTP and the queue share them; `rehydrate` rebuilds stored state.
 - A business rejection is an **outcome**, not an exception: `settleTransaction` sets `PROCESSED`, `REJECTED` with a `failureCode`, or `PENDING_REFERENCE`, so a rejection is stored, answered and published like any other result.
 
 **ORM.** MikroORM 7 with `EntitySchema` definitions and explicit mappers, chosen for its Unit of Work, `em.transactional()` and `LockMode`. Decorator entities were avoided to keep persistence out of the domain. Raw SQL (inbox claim, claims with `SKIP LOCKED`, ledger sum) always receives `em.getTransactionContext()`.

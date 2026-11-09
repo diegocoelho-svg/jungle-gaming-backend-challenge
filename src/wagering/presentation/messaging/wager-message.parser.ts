@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { ProcessWagerTransactionCommand } from "../../application/use-cases/process-wager-transaction.use-case";
 import { InvalidRequestError, parseSubmitTransaction } from "../http/request-parsers";
 
@@ -11,38 +12,40 @@ export interface WagerMessage {
   command: ProcessWagerTransactionCommand;
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+const envelopeSchema = z.object(
+  {
+    messageId: z.string({ error: "messageId is required" }).regex(SAFE_MESSAGE_ID, {
+      error: "messageId must be a string of up to 128 letters, digits, '_', ':', '.' or '-'",
+    }),
+    type: z.literal(WAGER_MESSAGE_TYPE, { error: `type must be ${WAGER_MESSAGE_TYPE}` }),
+    correlationId: z
+      .string({ error: "correlationId must be a safe identifier" })
+      .regex(SAFE_MESSAGE_ID, { error: "correlationId must be a safe identifier" })
+      .optional(),
+    data: z.record(z.string(), z.unknown(), { error: "data must be a JSON object" }),
+  },
+  { error: "message must be a JSON object" },
+);
 
 export function parseWagerMessage(body: string | undefined): WagerMessage {
-  let envelope: unknown;
+  let raw: unknown;
   try {
-    envelope = JSON.parse(body ?? "");
+    raw = JSON.parse(body ?? "");
   } catch {
     throw new InvalidRequestError(["message body must be JSON"]);
   }
 
-  if (!isRecord(envelope)) throw new InvalidRequestError(["message must be a JSON object"]);
-
-  const problems: string[] = [];
-  const { messageId, type, correlationId, data } = envelope;
-
-  if (typeof messageId !== "string" || !SAFE_MESSAGE_ID.test(messageId)) {
-    problems.push("messageId must be a string of up to 128 letters, digits, '_', ':', '.' or '-'");
+  const envelope = envelopeSchema.safeParse(raw);
+  if (!envelope.success) {
+    throw new InvalidRequestError([...new Set(envelope.error.issues.map((issue) => issue.message))]);
   }
-  if (type !== WAGER_MESSAGE_TYPE) problems.push(`type must be ${WAGER_MESSAGE_TYPE}`);
-  if (correlationId !== undefined && (typeof correlationId !== "string" || !SAFE_MESSAGE_ID.test(correlationId))) {
-    problems.push("correlationId must be a safe identifier");
-  }
-  if (!isRecord(data)) problems.push("data must be a JSON object");
-  if (problems.length > 0) throw new InvalidRequestError(problems);
 
-  const record = data as Record<string, unknown>;
-  const idempotencyKey = typeof record.idempotencyKey === "string" ? record.idempotencyKey : undefined;
+  const { messageId, correlationId, data } = envelope.data;
+  const idempotencyKey = typeof data.idempotencyKey === "string" ? data.idempotencyKey : undefined;
 
   return {
-    messageId: messageId as string,
-    ...(typeof correlationId === "string" && { correlationId }),
-    command: parseSubmitTransaction(record, idempotencyKey),
+    messageId,
+    ...(correlationId !== undefined && { correlationId }),
+    command: parseSubmitTransaction(data, idempotencyKey),
   };
 }

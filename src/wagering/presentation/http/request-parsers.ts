@@ -1,7 +1,7 @@
+import { z } from "zod";
 import type { OpenWalletCommand } from "../../application/use-cases/open-wallet.use-case";
 import type { ProcessWagerTransactionCommand } from "../../application/use-cases/process-wager-transaction.use-case";
 import { WagerTransactionKind } from "../../domain/entities/wager-transaction.entity";
-import type { MoneyProps } from "../../domain/value-objects/money.vo";
 
 export class InvalidRequestError extends Error {
   constructor(public readonly problems: string[]) {
@@ -11,146 +11,120 @@ export class InvalidRequestError extends Error {
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SUBMITTABLE_KINDS: string[] = [
+const SUBMITTABLE_KINDS = [
   WagerTransactionKind.Bet,
   WagerTransactionKind.Win,
   WagerTransactionKind.Loss,
   WagerTransactionKind.Refund,
   WagerTransactionKind.Rollback,
-];
+] as const;
 const MAX_TEXT_LENGTH = 255;
 const CONTROL_CHARACTERS = /\p{Cc}/u;
 const DEFAULT_LEDGER_LIMIT = 50;
 const MAX_LEDGER_LIMIT = 200;
+const CURSOR_PREFIX = "v1:";
 
 export const isUuid = (value: string): boolean => UUID.test(value);
 
 export const isIdentifier = (value: string): boolean =>
   value.length > 0 && value.length <= MAX_TEXT_LENGTH && !CONTROL_CHARACTERS.test(value);
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+const text = (field: string) => {
+  const error = `${field} must be a non-empty string up to ${MAX_TEXT_LENGTH} characters`;
+  return z
+    .string({ error })
+    .min(1, { error, abort: true })
+    .max(MAX_TEXT_LENGTH, { error, abort: true })
+    .refine((value) => !CONTROL_CHARACTERS.test(value), { error: `${field} must not contain control characters` });
+};
 
-class FieldReader {
-  readonly problems: string[] = [];
+const money = (field: string) => {
+  const error = `${field} must be an object with string amount and currency`;
+  return z.object({ amount: z.string({ error }), currency: z.string({ error }) }, { error });
+};
 
-  constructor(private readonly body: Record<string, unknown>) {}
+const openWalletSchema = z.object({
+  playerId: text("playerId"),
+  initialBalance: money("initialBalance"),
+});
 
-  text(field: string): string {
-    const value = this.body[field];
-    if (typeof value !== "string" || value.length === 0 || value.length > MAX_TEXT_LENGTH) {
-      this.problems.push(`${field} must be a non-empty string up to ${MAX_TEXT_LENGTH} characters`);
-      return "";
-    }
-    if (CONTROL_CHARACTERS.test(value)) {
-      this.problems.push(`${field} must not contain control characters`);
-      return "";
-    }
-    return value;
+const submitTransactionSchema = z.object({
+  providerId: text("providerId"),
+  externalTransactionId: text("externalTransactionId"),
+  playerId: text("playerId"),
+  walletId: text("walletId").refine(isUuid, { error: "walletId must be a UUID" }),
+  roundId: text("roundId"),
+  gameId: text("gameId"),
+  kind: z.enum(SUBMITTABLE_KINDS, { error: `kind must be one of ${SUBMITTABLE_KINDS.join(", ")}` }),
+  money: money("money"),
+  referenceExternalTransactionId: text("referenceExternalTransactionId").optional(),
+});
+
+const idempotencyKeySchema = z
+  .string({
+    error: `Idempotency-Key header is required, up to ${MAX_TEXT_LENGTH} characters, without control characters`,
+  })
+  .refine(isIdentifier, {
+    error: `Idempotency-Key header is required, up to ${MAX_TEXT_LENGTH} characters, without control characters`,
+  });
+
+const ledgerQuerySchema = z.object({
+  cursor: z
+    .string({ error: "cursor is invalid" })
+    .transform((cursor, context) => {
+      const decoded = Buffer.from(cursor, "base64url").toString("utf8");
+      const version = Number(decoded.slice(CURSOR_PREFIX.length));
+      if (decoded.startsWith(CURSOR_PREFIX) && Number.isInteger(version) && version >= 0) return version;
+      context.addIssue({ code: "custom", message: "cursor is invalid" });
+      return z.NEVER;
+    })
+    .optional(),
+  limit: z.coerce
+    .number({ error: `limit must be an integer between 1 and ${MAX_LEDGER_LIMIT}` })
+    .int({ error: `limit must be an integer between 1 and ${MAX_LEDGER_LIMIT}` })
+    .min(1, { error: `limit must be an integer between 1 and ${MAX_LEDGER_LIMIT}` })
+    .max(MAX_LEDGER_LIMIT, { error: `limit must be an integer between 1 and ${MAX_LEDGER_LIMIT}` })
+    .optional(),
+});
+
+const problemsOf = (error: z.ZodError): string[] => [...new Set(error.issues.map((issue) => issue.message))];
+
+function requireObject(body: unknown): Record<string, unknown> {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    throw new InvalidRequestError(["body must be a JSON object"]);
   }
-
-  optionalText(field: string): string | undefined {
-    return this.body[field] === undefined ? undefined : this.text(field);
-  }
-
-  uuid(field: string): string {
-    const value = this.text(field);
-    if (value && !isUuid(value)) this.problems.push(`${field} must be a UUID`);
-    return value;
-  }
-
-  money(field: string): MoneyProps {
-    const value = this.body[field];
-    if (!isRecord(value) || typeof value.amount !== "string" || typeof value.currency !== "string") {
-      this.problems.push(`${field} must be an object with string amount and currency`);
-      return { amount: "", currency: "" };
-    }
-    return { amount: value.amount, currency: value.currency };
-  }
-
-  kind(field: string): WagerTransactionKind {
-    const value = this.body[field];
-    if (typeof value !== "string" || !SUBMITTABLE_KINDS.includes(value)) {
-      this.problems.push(`${field} must be one of ${SUBMITTABLE_KINDS.join(", ")}`);
-    }
-    return value as WagerTransactionKind;
-  }
-
-  done(): void {
-    if (this.problems.length > 0) throw new InvalidRequestError(this.problems);
-  }
-}
-
-function readerFor(body: unknown): FieldReader {
-  if (!isRecord(body)) throw new InvalidRequestError(["body must be a JSON object"]);
-  return new FieldReader(body);
+  return body as Record<string, unknown>;
 }
 
 export function parseOpenWallet(body: unknown): OpenWalletCommand {
-  const reader = readerFor(body);
-  const command = { playerId: reader.text("playerId"), initialBalance: reader.money("initialBalance") };
-  reader.done();
-  return command;
+  const parsed = openWalletSchema.safeParse(requireObject(body));
+  if (!parsed.success) throw new InvalidRequestError(problemsOf(parsed.error));
+  return parsed.data;
 }
 
 export function parseSubmitTransaction(
   body: unknown,
   idempotencyKey: string | undefined,
 ): ProcessWagerTransactionCommand {
-  const reader = readerFor(body);
-  if (!idempotencyKey || idempotencyKey.length > MAX_TEXT_LENGTH || CONTROL_CHARACTERS.test(idempotencyKey)) {
-    reader.problems.push(
-      `Idempotency-Key header is required, up to ${MAX_TEXT_LENGTH} characters, without control characters`,
-    );
-  }
+  const key = idempotencyKeySchema.safeParse(idempotencyKey);
+  const parsed = submitTransactionSchema.safeParse(requireObject(body));
 
-  const referenceExternalTransactionId = reader.optionalText("referenceExternalTransactionId");
-  const command: ProcessWagerTransactionCommand = {
-    providerId: reader.text("providerId"),
-    externalTransactionId: reader.text("externalTransactionId"),
-    idempotencyKey: idempotencyKey ?? "",
-    playerId: reader.text("playerId"),
-    walletId: reader.uuid("walletId"),
-    roundId: reader.text("roundId"),
-    gameId: reader.text("gameId"),
-    kind: reader.kind("kind"),
-    money: reader.money("money"),
+  const problems = [...(key.success ? [] : problemsOf(key.error)), ...(parsed.success ? [] : problemsOf(parsed.error))];
+  if (!key.success || !parsed.success) throw new InvalidRequestError(problems);
+
+  const { referenceExternalTransactionId, ...command } = parsed.data;
+  return {
+    ...command,
+    idempotencyKey: key.data,
     ...(referenceExternalTransactionId !== undefined && { referenceExternalTransactionId }),
   };
-
-  reader.done();
-  return command;
 }
-
-const CURSOR_PREFIX = "v1:";
 
 export const encodeLedgerCursor = (afterVersion: number): string =>
   Buffer.from(`${CURSOR_PREFIX}${afterVersion}`).toString("base64url");
 
 export function parseLedgerQuery(cursor: unknown, limit: unknown): { afterVersion: number; limit: number } {
-  const problems: string[] = [];
-  let afterVersion = 0;
-  let pageSize = DEFAULT_LEDGER_LIMIT;
-
-  if (cursor !== undefined) {
-    const decoded = typeof cursor === "string" ? Buffer.from(cursor, "base64url").toString("utf8") : "";
-    const version = Number(decoded.slice(CURSOR_PREFIX.length));
-    if (!decoded.startsWith(CURSOR_PREFIX) || !Number.isInteger(version) || version < 0) {
-      problems.push("cursor is invalid");
-    } else {
-      afterVersion = version;
-    }
-  }
-
-  if (limit !== undefined) {
-    const value = Number(limit);
-    if (!Number.isInteger(value) || value < 1 || value > MAX_LEDGER_LIMIT) {
-      problems.push(`limit must be an integer between 1 and ${MAX_LEDGER_LIMIT}`);
-    } else {
-      pageSize = value;
-    }
-  }
-
-  if (problems.length > 0) throw new InvalidRequestError(problems);
-  return { afterVersion, limit: pageSize };
+  const parsed = ledgerQuerySchema.safeParse({ cursor, limit });
+  if (!parsed.success) throw new InvalidRequestError(problemsOf(parsed.error));
+  return { afterVersion: parsed.data.cursor ?? 0, limit: parsed.data.limit ?? DEFAULT_LEDGER_LIMIT };
 }
