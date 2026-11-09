@@ -26,6 +26,16 @@ This starts PostgreSQL, MiniStack, runs the migrations, creates the queues and s
 
 PostgreSQL is on `localhost:5433` and MiniStack on `localhost:4566`.
 
+### Several instances
+
+Every role is stateless, so any of them can be scaled. Give each scaled service a port range:
+
+```bash
+API_PORT=3000-3002 CONSUMER_METRICS_PORT=9464-9466 WORKERS_METRICS_PORT=9470-9471   docker compose up --build --scale api=3 --scale consumer=3 --scale workers=2
+```
+
+Each process opens up to `DB_POOL_MAX` (10) connections; the total must stay below PostgreSQL `max_connections` (100).
+
 ### Quick check
 
 ```bash

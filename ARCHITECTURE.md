@@ -133,12 +133,12 @@ PENDING_REFERENCE ──► PROCESSED | REJECTED | FAILED
 
 - `PENDING` exists only in memory; the decision happens in the insert transaction.
 - Terminal states are enforced by the domain and by the `wager_transactions_guard` trigger.
-- `FAILED` (`INFRASTRUCTURE_FAILURE`) is supported end to end but produced by no path. Transient failures answer `503`, unexpected ones `500`; neither is stored, so an outage never becomes a permanent outcome.
+- `FAILED` (`INFRASTRUCTURE_FAILURE`) is supported end to end but produced by no path. Transient failures answer `503`, unexpected ones `500`; neither is stored, so an outage never becomes a permanent outcome. A failure is transient only when resending the same request can succeed: connection loss, an unresolvable host, lock timeout, deadlock, serialization. Any SQLSTATE of class `08` counts as connection trouble, including `08P01`, which a NUL byte in the SQL text also produces; text fields and the idempotency key therefore reject control characters before reaching the database, so bad input fails as `400` instead of being retried.
 
 | Kind | Effect |
 |---|---|
 | `OPENING` | internal credit when a wallet opens with a positive balance |
-| `BET` | debit, rejected without funds |
+| `BET` | debit, rejected without funds; cannot carry a reference |
 | `WIN` | credit, may reference the `BET` |
 | `LOSS` | no movement; amount may be `0.00` |
 | `REFUND` | credit reversing a processed `BET`, once |
@@ -293,5 +293,6 @@ Everything except unit tests runs against **real PostgreSQL and MiniStack**.
 - A single hot wallet is bounded by sequential processing on one row.
 - Authentication is a placeholder (section 11).
 - A `BET` stays `PROCESSED` after a `WIN` and can still be reversed (`BET 10`, `WIN 50`, `REFUND 10` keeps both). The challenge allows it literally; blocking it would be a new reference rule.
+- A `WIN` referencing a `BET` is accepted after that `BET` was refunded or rolled back, and several `WIN`s may reference the same `BET`. Rounds with multiple wins are legitimate; rejecting them would need round state the challenge does not define.
 - A pending reference that keeps hitting a non-transient error is retried every cycle and logged, never moved to `FAILED`; that would need an error counter on the row.
 - Partial reversals and currency conversion are out of scope.
