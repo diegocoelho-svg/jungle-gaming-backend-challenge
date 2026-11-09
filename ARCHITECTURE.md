@@ -408,6 +408,12 @@ API: check route scope and token provider_id against the payload
   - a hot wallet never goes negative or loses an update;
   - a locked wallet does not block another one;
   - a lock held past `lock_timeout` answers `503`.
+- **Failure tests** (`bun run test:failure`) start real `bun src/main.ts` processes. A small SQS proxy inside the test holds a chosen call (`DeleteMessage`, `SendMessageBatch`), so a process can be killed with `SIGKILL` at an exact point instead of after a guessed delay:
+  - three consumer processes share a hot backlog with duplicate messages and settle each operation once;
+  - a consumer killed after its commit and before its `DeleteMessage` causes no second debit: the redelivery is only acknowledged;
+  - a consumer killed in the middle of a batch is replaced, and every message is settled exactly once;
+  - a publisher killed after `SendMessageBatch` reached SQS and before marking the rows leaves nothing unpublished, and the resend is deduplicated by event id;
+  - every process (API, two consumers, workers) killed under HTTP and queue load, after both made progress and with queue work still pending, then restarted: queue drained, pending references resolved, outbox empty, no accepted HTTP bet lost, and every wallet reconciles with its ledger.
 - **Mutation checks:** protections were removed one at a time (wallet lock, payload comparison, unique-violation retry, outbox write, inbox deduplication, schema constraints) to confirm the suite catches each. Every mutation was caught except removing the recheck under the lock, which is covered by the unique indexes plus the retry and only saves a round trip.
 
 ## 14. Current status and limitations
@@ -416,7 +422,6 @@ Implemented: domain, schema and migrations, HTTP API, SQS consumer (ack after co
 
 In progress:
 
-- failure tests with three or more processes, including a process killed between commit and ack;
 - remaining metrics (transactions by status, duplicates, retries, DLQ, lock conflicts, outbox lag, latency).
 
 Known limitations:
