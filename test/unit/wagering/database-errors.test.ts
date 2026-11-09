@@ -15,6 +15,7 @@ describe("database error classification", () => {
     ["pool connect timeout", { message: "timeout exceeded when trying to connect" }],
     ["admin shutdown", { code: "57P01" }],
     ["connection exception class", { code: "08006" }],
+    ["protocol violation", { code: "08P01", message: "invalid message format" }],
     ["too many connections", { code: "53300" }],
     ["sql state on the cause", { message: "driver error", cause: { code: "40001" } }],
   ])("%s is transient", (_name, error) => {
@@ -25,6 +26,7 @@ describe("database error classification", () => {
     ["unique violation", { code: "23505" }],
     ["check violation", { code: "23514" }],
     ["syntax error", { code: "42601", message: "syntax error at or near" }],
+    ["invalid byte sequence", { code: "22021", message: 'invalid byte sequence for encoding "UTF8": 0x00' }],
     ["unknown error", new Error("boom")],
     ["null", null],
   ])("%s is not transient", (_name, error) => {

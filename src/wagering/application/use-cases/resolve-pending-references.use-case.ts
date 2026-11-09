@@ -13,7 +13,7 @@ export interface ResolutionReport {
 }
 
 type Resolution =
-  | { kind: "resolved"; status: WagerTransactionStatus }
+  | { kind: "resolved"; status: WagerTransactionStatus; transactionId: string; walletId: string; providerId: string }
   | { kind: "rescheduled" }
   | { kind: "skipped" }
   | { kind: "none" };
@@ -36,6 +36,15 @@ export class ResolvePendingReferencesUseCase {
       if (resolution.kind === "resolved") {
         report.resolved += 1;
         this.metrics.transactionSettled(resolution.status, "worker");
+        this.logger.info(
+          {
+            transactionId: resolution.transactionId,
+            walletId: resolution.walletId,
+            providerId: resolution.providerId,
+            context: resolution.status,
+          },
+          "pending reference resolved",
+        );
       }
       if (resolution.kind === "rescheduled") {
         report.rescheduled += 1;
@@ -95,10 +104,12 @@ export class ResolvePendingReferencesUseCase {
       repositories.outbox.enqueue(message);
     }
 
-    this.logger.info(
-      { transactionId, walletId, providerId: transaction.providerId, context: transaction.status },
-      "pending reference resolved",
-    );
-    return { kind: "resolved", status: transaction.status };
+    return {
+      kind: "resolved",
+      status: transaction.status,
+      transactionId,
+      walletId,
+      providerId: transaction.providerId,
+    };
   }
 }

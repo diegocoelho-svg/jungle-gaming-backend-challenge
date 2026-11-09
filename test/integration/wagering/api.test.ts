@@ -70,6 +70,7 @@ describe("POST /wallets", () => {
     ["one decimal place", { playerId: "p", initialBalance: { amount: "1.5", currency: "BRL" } }],
     ["negative amount", { playerId: "p", initialBalance: { amount: "-1.00", currency: "BRL" } }],
     ["invalid currency", { playerId: "p", initialBalance: { amount: "1.00", currency: "real" } }],
+    ["a NUL byte in the player", { playerId: "a\u0000b", initialBalance: { amount: "1.00", currency: "BRL" } }],
   ])("rejects %s with 400", async (_, body) => {
     const reply = await call(api, "POST", "/wallets", body);
 
@@ -79,6 +80,22 @@ describe("POST /wallets", () => {
 });
 
 describe("POST /wagering/transactions", () => {
+  test.each([
+    ["a NUL byte in a text field", { gameId: "game\u0000x" }],
+    ["a BET with a reference", { referenceExternalTransactionId: "tx-other" }],
+  ])("rejects %s with 400 before touching the wallet", async (_, extra) => {
+    const wallet = await createWallet(api, "100.00");
+
+    const reply = await submit(api, {
+      ...wagerBody({ walletId: wallet.id, playerId: wallet.playerId, kind: "BET", amount: "10.00" }),
+      ...extra,
+    });
+
+    expect(reply.status).toBe(400);
+    expect((reply.body as unknown as { error: string }).error).toBe("INVALID_REQUEST");
+    expect((await call(api, "GET", `/wallets/${wallet.id}`)).body).toMatchObject({ version: 1 });
+  });
+
   test("processes a BET and returns the new balance", async () => {
     const wallet = await createWallet(api, "1000.00");
 
@@ -398,6 +415,13 @@ describe("queries", () => {
     expect(
       (await call(api, "GET", `/providers/provider-b/wagering/transactions/${body.externalTransactionId}`)).status,
     ).toBe(404);
+  });
+
+  test("a control character in the provider lookup is a 404, not a database failure", async () => {
+    const reply = await call(api, "GET", "/providers/provider-a/wagering/transactions/tx%00x");
+
+    expect(reply.status).toBe(404);
+    expect(reply.body.error).toBe("TRANSACTION_NOT_FOUND");
   });
 });
 

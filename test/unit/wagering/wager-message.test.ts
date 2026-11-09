@@ -43,6 +43,9 @@ describe("wager message parser", () => {
     ["a missing idempotency key", body({ data: { ...data, idempotencyKey: undefined } })],
     ["an OPENING kind", body({ data: { ...data, kind: "OPENING" } })],
     ["a numeric amount", body({ data: { ...data, money: { amount: 25, currency: "BRL" } } })],
+    ["a NUL byte in a text field", body({ data: { ...data, gameId: "game\u0000x" } })],
+    ["a NUL byte in the idempotency key", body({ data: { ...data, idempotencyKey: "key\u0000x" } })],
+    ["a control character in the player id", body({ data: { ...data, playerId: "player\n1" } })],
   ])("rejects %s", (_, raw) => {
     expect(() => parseWagerMessage(raw)).toThrow(InvalidRequestError);
   });

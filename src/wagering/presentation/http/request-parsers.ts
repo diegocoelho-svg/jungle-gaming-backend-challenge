@@ -19,10 +19,14 @@ const SUBMITTABLE_KINDS: string[] = [
   WagerTransactionKind.Rollback,
 ];
 const MAX_TEXT_LENGTH = 255;
+const CONTROL_CHARACTERS = /\p{Cc}/u;
 const DEFAULT_LEDGER_LIMIT = 50;
 const MAX_LEDGER_LIMIT = 200;
 
 export const isUuid = (value: string): boolean => UUID.test(value);
+
+export const isIdentifier = (value: string): boolean =>
+  value.length > 0 && value.length <= MAX_TEXT_LENGTH && !CONTROL_CHARACTERS.test(value);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -36,6 +40,10 @@ class FieldReader {
     const value = this.body[field];
     if (typeof value !== "string" || value.length === 0 || value.length > MAX_TEXT_LENGTH) {
       this.problems.push(`${field} must be a non-empty string up to ${MAX_TEXT_LENGTH} characters`);
+      return "";
+    }
+    if (CONTROL_CHARACTERS.test(value)) {
+      this.problems.push(`${field} must not contain control characters`);
       return "";
     }
     return value;
@@ -90,8 +98,10 @@ export function parseSubmitTransaction(
   idempotencyKey: string | undefined,
 ): ProcessWagerTransactionCommand {
   const reader = readerFor(body);
-  if (!idempotencyKey || idempotencyKey.length > MAX_TEXT_LENGTH) {
-    reader.problems.push(`Idempotency-Key header is required, up to ${MAX_TEXT_LENGTH} characters`);
+  if (!idempotencyKey || idempotencyKey.length > MAX_TEXT_LENGTH || CONTROL_CHARACTERS.test(idempotencyKey)) {
+    reader.problems.push(
+      `Idempotency-Key header is required, up to ${MAX_TEXT_LENGTH} characters, without control characters`,
+    );
   }
 
   const referenceExternalTransactionId = reader.optionalText("referenceExternalTransactionId");

@@ -230,7 +230,8 @@ const repositoriesFor = (em: EntityManager): WageringRepositories => ({
 function translate(error: unknown, metrics: WageringMetrics): unknown {
   if (isUniqueViolation(error)) return new UniqueViolationError(constraintOf(error));
   if (isLockConflict(error)) metrics.lockConflict();
-  if (isTransientDatabaseFailure(error)) return new TransientFailureError("Database temporarily unavailable");
+  if (isTransientDatabaseFailure(error))
+    return new TransientFailureError("Database temporarily unavailable", { cause: error });
   return error;
 }
 

@@ -44,10 +44,9 @@ export class PrometheusWageringMetrics implements WageringMetrics {
   private readonly deadLetters: Counter<"reason">;
   private readonly lockConflicts: Counter;
   private readonly processing: Histogram<"source">;
-  private readonly outboxPending: Gauge;
-  private readonly outboxLag: Gauge;
+  private outbox?: { pending: Gauge; lag: Gauge };
 
-  constructor(registry: Registry) {
+  constructor(private readonly registry: Registry) {
     const registers = [registry];
     this.transactions = new Counter({
       name: "wagering_transactions_total",
@@ -85,16 +84,6 @@ export class PrometheusWageringMetrics implements WageringMetrics {
       buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
       registers,
     });
-    this.outboxPending = new Gauge({
-      name: "wagering_outbox_pending",
-      help: "Outbox events not yet published",
-      registers,
-    });
-    this.outboxLag = new Gauge({
-      name: "wagering_outbox_lag_seconds",
-      help: "Age of the oldest unpublished outbox event",
-      registers,
-    });
   }
 
   transactionSettled(status: WagerTransactionStatus, source: SettlementSource): void {
@@ -122,7 +111,19 @@ export class PrometheusWageringMetrics implements WageringMetrics {
   }
 
   outboxBacklog(pending: number, oldestAgeSeconds: number): void {
-    this.outboxPending.set(pending);
-    this.outboxLag.set(oldestAgeSeconds);
+    this.outbox ??= {
+      pending: new Gauge({
+        name: "wagering_outbox_pending",
+        help: "Outbox events not yet published",
+        registers: [this.registry],
+      }),
+      lag: new Gauge({
+        name: "wagering_outbox_lag_seconds",
+        help: "Age of the oldest unpublished outbox event",
+        registers: [this.registry],
+      }),
+    };
+    this.outbox.pending.set(pending);
+    this.outbox.lag.set(oldestAgeSeconds);
   }
 }

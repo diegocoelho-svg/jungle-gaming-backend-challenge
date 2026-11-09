@@ -75,6 +75,7 @@ export class HttpErrorFilter implements ExceptionFilter {
     }
 
     if (reply.status === HttpStatus.SERVICE_UNAVAILABLE) {
+      this.logger.warn({ err: exception }, "request failed temporarily");
       response.setHeader("Retry-After", RETRY_AFTER_SECONDS);
     }
 

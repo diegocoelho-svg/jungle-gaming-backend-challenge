@@ -137,8 +137,20 @@ export class ProcessWagerTransactionUseCase {
   }
 
   private recordOutcome({ transaction, idempotentReplay }: WagerTransactionOutcome, source: SettlementSource): void {
-    if (idempotentReplay) this.metrics.duplicateDetected("idempotent-replay");
-    else this.metrics.transactionSettled(transaction.status, source);
+    if (idempotentReplay) {
+      this.metrics.duplicateDetected("idempotent-replay");
+      return;
+    }
+    this.metrics.transactionSettled(transaction.status, source);
+    this.logger.info(
+      {
+        transactionId: transaction.id,
+        walletId: transaction.walletId,
+        providerId: transaction.providerId,
+        context: transaction.status,
+      },
+      "wager transaction settled",
+    );
   }
 
   private prepare(command: ProcessWagerTransactionCommand): { money: Money; payloadHash: string } {
@@ -251,16 +263,6 @@ export class ProcessWagerTransactionUseCase {
     for (const message of settlementEvents({ transaction, wallet, entry, correlation, ids: this.ids, at: now })) {
       repositories.outbox.enqueue(message);
     }
-
-    this.logger.info(
-      {
-        transactionId: transaction.id,
-        walletId: wallet.id,
-        providerId: transaction.providerId,
-        context: transaction.status,
-      },
-      "wager transaction settled",
-    );
 
     return { transaction, idempotentReplay: false };
   }

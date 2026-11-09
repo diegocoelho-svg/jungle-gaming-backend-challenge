@@ -29,8 +29,13 @@ function keepLoggableFields(fields: Record<string, unknown>): Record<string, unk
   if (typeof kept.stack === "string") kept.stack = maskDecimals(kept.stack);
 
   if (fields.err instanceof Error) {
-    const { name, message, stack } = fields.err;
-    kept.err = { type: name, message: maskDecimals(message), stack: stack && maskDecimals(stack) };
+    const { name, message, stack, cause } = fields.err;
+    kept.err = {
+      type: name,
+      message: maskDecimals(message),
+      stack: stack && maskDecimals(stack),
+      ...(cause instanceof Error && { cause: { type: cause.name, message: maskDecimals(cause.message) } }),
+    };
   }
 
   return kept;

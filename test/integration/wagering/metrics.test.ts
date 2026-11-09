@@ -92,6 +92,8 @@ describe("metrics", () => {
     expect(delta("wagering_duplicates_total", { kind: "idempotency-conflict" })).toBe(1);
     expect(delta("wagering_lock_conflicts_total")).toBe(1);
     expect(delta("wagering_processing_duration_seconds_count", { source: "http" })).toBe(5);
+    expect(after).not.toContain("wagering_outbox_pending");
+    expect(after).not.toContain("wagering_outbox_lag_seconds");
   }, 20_000);
 
   test("the consumer counts queue settlements, duplicate messages, retries and dead letters", async () => {

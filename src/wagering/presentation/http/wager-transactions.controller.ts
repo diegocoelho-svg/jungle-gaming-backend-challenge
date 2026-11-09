@@ -5,7 +5,7 @@ import { currentRequestContext } from "../../../core/observability/request-conte
 import { TransactionNotFoundError } from "../../application/errors/application.error";
 import { ProcessWagerTransactionUseCase } from "../../application/use-cases/process-wager-transaction.use-case";
 import { WageringQueries } from "../../application/use-cases/wagering-queries.use-case";
-import { isUuid, parseSubmitTransaction } from "./request-parsers";
+import { isIdentifier, isUuid, parseSubmitTransaction } from "./request-parsers";
 import { submissionResponse, transactionResponse } from "./responses";
 
 @Controller()
@@ -48,6 +48,9 @@ export class WagerTransactionsController {
     @Param("providerId") providerId: string,
     @Param("externalTransactionId") externalTransactionId: string,
   ) {
+    if (!isIdentifier(providerId) || !isIdentifier(externalTransactionId)) {
+      throw new TransactionNotFoundError(`Transaction not found for provider ${providerId}`);
+    }
     const resolvedProvider = this.providerIdentity.resolve(providerId);
     return transactionResponse(await this.queries.getProviderTransaction(resolvedProvider, externalTransactionId));
   }

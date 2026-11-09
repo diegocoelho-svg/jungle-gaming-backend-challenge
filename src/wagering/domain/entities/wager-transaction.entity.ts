@@ -126,6 +126,9 @@ export class WagerTransaction {
     if (props.referenceExternalTransactionId === "") {
       throw new InvalidTransactionError("referenceExternalTransactionId cannot be empty");
     }
+    if (props.kind === WagerTransactionKind.Bet && props.referenceExternalTransactionId !== undefined) {
+      throw new InvalidTransactionError("BET cannot reference another transaction");
+    }
 
     const transaction = new WagerTransaction({
       ...props,

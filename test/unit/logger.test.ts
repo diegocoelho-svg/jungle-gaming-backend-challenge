@@ -61,6 +61,17 @@ describe("logger", () => {
     expect(read().err.stack).toContain("logger.test.ts");
   });
 
+  test("keeps the cause of an Error, masking amounts", () => {
+    const { logger, read } = captureLogger();
+
+    logger.warn(
+      { err: new Error("Database temporarily unavailable", { cause: new Error("read ECONNRESET after 25.00") }) },
+      "warn",
+    );
+
+    expect(read().err.cause).toEqual({ type: "Error", message: "read ECONNRESET after [REDACTED]" });
+  });
+
   test.each<[string, (logger: ReturnType<typeof createLogger>) => void]>([
     ["plain string", (logger) => logger.error("balance 25.00")],
     ["string with an argument", (logger) => logger.error("balance %s", "25.00")],

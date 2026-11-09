@@ -77,6 +77,14 @@ describe("WagerTransaction.create", () => {
     expect(aTransaction(kind, "1.00", REF).requiresReference()).toBe(true);
   });
 
+  test("BET cannot reference another transaction", () => {
+    expect(() => aTransaction(Kind.Bet, "1.00", REF)).toThrow(InvalidTransactionError);
+  });
+
+  test.each([Kind.Win, Kind.Loss])("%s may reference the bet it settles", (kind) => {
+    expect(aTransaction(kind, "1.00", REF).referenceExternalTransactionId).toBe(REF.referenceExternalTransactionId);
+  });
+
   test.each([Kind.Bet, Kind.Win, Kind.Loss])("%s does not require a reference", (kind) => {
     expect(aTransaction(kind, "1.00").requiresReference()).toBe(false);
   });
