@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { runWithRequestContext } from "./request-context";
 
-export const CORRELATION_HEADER = "x-correlation-id";
+const CORRELATION_HEADER = "x-correlation-id";
 
 const SAFE_CORRELATION_ID = /^[\w-]{1,128}$/;
 

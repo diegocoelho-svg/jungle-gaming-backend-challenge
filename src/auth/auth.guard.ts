@@ -1,6 +1,6 @@
 import { type CanActivate, Injectable, SetMetadata } from "@nestjs/common";
 
-export const IS_PUBLIC_ROUTE = "auth:public";
+const IS_PUBLIC_ROUTE = "auth:public";
 
 export const Public = () => SetMetadata(IS_PUBLIC_ROUTE, true);
 

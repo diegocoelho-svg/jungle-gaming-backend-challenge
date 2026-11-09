@@ -62,7 +62,7 @@ Status codes and error bodies are described in [ARCHITECTURE.md](ARCHITECTURE.md
 | Queue | Direction |
 |---|---|
 | `wager-transactions.fifo` | input; `WagerTransactionRequested` messages, `MessageGroupId` = wallet id |
-| `wager-transactions-dlq.fifo` | dead letters, with the reason as a message attribute |
+| `wager-transactions-dlq.fifo` | dead letters; messages sent there directly by the consumer carry a `reason` attribute, messages redriven by SQS after 5 receives do not |
 | `wagering-events.fifo` | `WagerTransactionProcessed`, `WagerTransactionRejected`, `WagerTransactionPendingReference`, `WalletBalanceChanged` |
 
 ## Tests

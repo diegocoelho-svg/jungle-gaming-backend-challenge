@@ -173,7 +173,7 @@ PENDING_REFERENCE ──► PROCESSED | REJECTED | FAILED
 
 **Outbox.** Events are rows written in the same transaction as wallet, ledger and transaction; nothing reaches SQS during a request. Publishing before commit could expose a rolled-back operation, publishing after commit loses events on a crash, SQS has no two-phase commit, and CDC is a whole extra service.
 
-The publisher claims up to 50 due rows with `FOR UPDATE SKIP LOCKED`, sends them with `SendMessageBatch` and marks them in the same transaction, so publishers share the work and a dead one releases its rows. A failed send is retried from when the call returned (1 s doubling, capped at 5 minutes), never dropped. Delivery is **at least once**: the FIFO deduplication id is the event id, and consumers deduplicate by it too. Events: `WagerTransactionProcessed` (also for `LOSS`), `WagerTransactionRejected`, `WagerTransactionPendingReference`, and `WalletBalanceChanged` only when the balance moves, carrying `walletVersion` for ordering. Payloads hold `MoneyProps`, `correlationId` and `causationId`; worker-emitted events use the transaction id for both.
+The publisher claims up to 50 due rows with `FOR UPDATE SKIP LOCKED`, sends them with `SendMessageBatch` and marks them in the same transaction, so publishers share the work and a dead one releases its rows. A failed send is retried from when the call returned (1 s doubling, capped at 5 minutes), never dropped. Delivery is **at least once**: the FIFO deduplication id is the event id, which drops resends within 5 minutes, and downstream consumers, outside this service, are expected to deduplicate by it. Events: `WagerTransactionProcessed` (also for `LOSS`), `WagerTransactionRejected`, `WagerTransactionPendingReference`, and `WalletBalanceChanged` only when the balance moves, carrying `walletVersion` for ordering. Payloads hold `MoneyProps`, `correlationId` and `causationId`; worker-emitted events use the transaction id for both.
 
 **Inbox.** `inbox_messages (consumer_name, message_id)` stores the business payload hash and is written in the settlement transaction with `ON CONFLICT DO NOTHING`. A failed settlement rolls it back so the message can be redelivered; an idempotency conflict keeps it.
 
@@ -182,10 +182,10 @@ The publisher claims up to 50 due rows with `FOR UPDATE SKIP LOCKED`, sends them
 | Queue | Settings |
 |---|---|
 | `wager-transactions.fifo` | visibility 30 s; redrive after 5 receives; producers group by `walletId` |
-| `wager-transactions-dlq.fifo` | dead letters with the reason as an attribute |
+| `wager-transactions-dlq.fifo` | dead letters; direct sends carry a `reason` attribute, SQS redrives do not |
 | `wagering-events.fifo` | **this project's choice**, the challenge names no destination; group = wallet, dedup = event id |
 
-FIFO ordering and deduplication are optimizations: duplicates, reordering and redelivery are still expected and handled by the database.
+FIFO ordering and deduplication are optimizations: on the input queue, duplicates, reordering and redelivery are still expected and handled by the inbox and the database.
 
 **Consumer.** It validates the envelope with the HTTP parser, calls `executeFromMessage` and acknowledges **only after the commit**.
 

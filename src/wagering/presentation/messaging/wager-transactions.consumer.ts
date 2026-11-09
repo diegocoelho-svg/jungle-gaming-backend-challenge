@@ -20,7 +20,7 @@ import { DomainError } from "../../domain/errors/domain.error";
 import { InvalidRequestError } from "../http/request-parsers";
 import { parseWagerMessage, type WagerMessage } from "./wager-message.parser";
 
-export const WAGER_CONSUMER_NAME = "wager-transactions";
+const WAGER_CONSUMER_NAME = "wager-transactions";
 
 const RECEIVE_BATCH_SIZE = 10;
 const RECEIVE_WAIT_SECONDS = 3;

@@ -4,7 +4,7 @@ import type { Logger } from "../../../core/observability/logger";
 import { ResolvePendingReferencesUseCase } from "../../application/use-cases/resolve-pending-references.use-case";
 import { PollingWorker } from "./polling-worker";
 
-export const PENDING_REFERENCE_BATCH_SIZE = 20;
+const PENDING_REFERENCE_BATCH_SIZE = 20;
 
 @Injectable()
 export class PendingReferenceWorker extends PollingWorker {

@@ -18,7 +18,7 @@ interface DriverErrorShape {
 
 const shapeOf = (error: unknown): DriverErrorShape => (error ?? {}) as DriverErrorShape;
 
-export function sqlStateOf(error: unknown): string | undefined {
+function sqlStateOf(error: unknown): string | undefined {
   const shape = shapeOf(error);
   const state = shape.code ?? shape.sqlState ?? shape.cause?.code;
   return typeof state === "string" ? state : undefined;

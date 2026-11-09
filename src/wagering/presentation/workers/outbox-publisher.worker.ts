@@ -4,7 +4,7 @@ import type { Logger } from "../../../core/observability/logger";
 import { PublishOutboxUseCase } from "../../application/use-cases/publish-outbox.use-case";
 import { PollingWorker } from "./polling-worker";
 
-export const OUTBOX_BATCH_SIZE = 50;
+const OUTBOX_BATCH_SIZE = 50;
 
 @Injectable()
 export class OutboxPublisherWorker extends PollingWorker {

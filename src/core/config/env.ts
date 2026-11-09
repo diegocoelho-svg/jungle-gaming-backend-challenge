@@ -1,4 +1,4 @@
-export const APP_ROLES = ["api", "consumer", "workers"] as const;
+const APP_ROLES = ["api", "consumer", "workers"] as const;
 export type AppRole = (typeof APP_ROLES)[number];
 
 export interface Env {
@@ -32,8 +32,8 @@ export class InvalidEnvError extends Error {
 
 export const QUEUE_VISIBILITY_TIMEOUT_MS = 30_000;
 export const SQS_REQUEST_TIMEOUT_MS = 5_000;
-export const MIN_VISIBILITY_HEARTBEAT_MS = 100;
-export const MAX_VISIBILITY_HEARTBEAT_MS = QUEUE_VISIBILITY_TIMEOUT_MS - 2 * SQS_REQUEST_TIMEOUT_MS;
+const MIN_VISIBILITY_HEARTBEAT_MS = 100;
+const MAX_VISIBILITY_HEARTBEAT_MS = QUEUE_VISIBILITY_TIMEOUT_MS - 2 * SQS_REQUEST_TIMEOUT_MS;
 
 const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace", "silent"];
 
