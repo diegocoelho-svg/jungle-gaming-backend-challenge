@@ -5,6 +5,8 @@ const TRANSIENT_MESSAGES = [
   "ECONNREFUSED",
   "ECONNRESET",
   "ETIMEDOUT",
+  "ENOTFOUND",
+  "EAI_AGAIN",
   "Query read timeout",
 ];
 
