@@ -1,5 +1,6 @@
+import { BackgroundMetricsModule } from "../metrics/background-metrics.module";
 import { Module } from "@nestjs/common";
 import { WageringWorkersModule } from "../wagering/presentation/workers/wagering-workers.module";
 
-@Module({ imports: [WageringWorkersModule] })
+@Module({ imports: [BackgroundMetricsModule, WageringWorkersModule] })
 export class WorkersModule {}

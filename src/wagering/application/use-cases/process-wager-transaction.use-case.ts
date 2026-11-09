@@ -16,6 +16,7 @@ import {
 } from "../errors/application.error";
 import type { WageringRepositories, WageringUnitOfWork } from "../ports/wagering-unit-of-work.port";
 import type { ApplicationLogger, Clock, IdGenerator } from "../ports/runtime.port";
+import { NO_METRICS, type SettlementSource, type WageringMetrics } from "../ports/wagering-metrics.port";
 import { type CorrelationContext, settlementEvents } from "../services/wagering-events";
 
 export interface ProcessWagerTransactionCommand {
@@ -55,27 +56,52 @@ export class ProcessWagerTransactionUseCase {
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
     private readonly logger: ApplicationLogger,
+    private readonly metrics: WageringMetrics = NO_METRICS,
   ) {}
 
   async execute(
     command: ProcessWagerTransactionCommand,
     correlation: CorrelationContext,
   ): Promise<WagerTransactionOutcome> {
-    const { money, payloadHash } = this.prepare(command);
+    return this.measured("http", async () => {
+      const { money, payloadHash } = this.prepare(command);
+      try {
+        const outcome = await this.withRetries(command, async () => {
+          const replay = await this.unitOfWork.read((repositories) =>
+            this.findExisting(repositories, command, payloadHash),
+          );
+          if (replay) return replay;
 
-    return this.withRetries(command, async () => {
-      const replay = await this.unitOfWork.read((repositories) =>
-        this.findExisting(repositories, command, payloadHash),
-      );
-      if (replay) return replay;
-
-      return this.unitOfWork.transaction((repositories) =>
-        this.settle(repositories, command, money, payloadHash, correlation),
-      );
+          return this.unitOfWork.transaction((repositories) =>
+            this.settle(repositories, command, money, payloadHash, correlation),
+          );
+        });
+        this.recordOutcome(outcome, "http");
+        return outcome;
+      } catch (error) {
+        if (error instanceof IdempotencyConflictError) this.metrics.duplicateDetected("idempotency-conflict");
+        throw error;
+      }
     });
   }
 
   async executeFromMessage(
+    command: ProcessWagerTransactionCommand,
+    correlation: CorrelationContext,
+    delivery: MessageDelivery,
+  ): Promise<MessageOutcome> {
+    return this.measured("queue", async () => {
+      const outcome = await this.settleMessage(command, correlation, delivery);
+      if (outcome.kind === "settled") this.recordOutcome(outcome.outcome, "queue");
+      if (outcome.kind === "duplicate-message") {
+        this.metrics.duplicateDetected(outcome.samePayload ? "duplicate-message" : "message-id-reused");
+      }
+      if (outcome.kind === "idempotency-conflict") this.metrics.duplicateDetected("idempotency-conflict");
+      return outcome;
+    });
+  }
+
+  private settleMessage(
     command: ProcessWagerTransactionCommand,
     correlation: CorrelationContext,
     delivery: MessageDelivery,
@@ -101,6 +127,20 @@ export class ProcessWagerTransactionUseCase {
     );
   }
 
+  private async measured<T>(source: SettlementSource, work: () => Promise<T>): Promise<T> {
+    const started = performance.now();
+    try {
+      return await work();
+    } finally {
+      this.metrics.processingObserved(source, (performance.now() - started) / 1_000);
+    }
+  }
+
+  private recordOutcome({ transaction, idempotentReplay }: WagerTransactionOutcome, source: SettlementSource): void {
+    if (idempotentReplay) this.metrics.duplicateDetected("idempotent-replay");
+    else this.metrics.transactionSettled(transaction.status, source);
+  }
+
   private prepare(command: ProcessWagerTransactionCommand): { money: Money; payloadHash: string } {
     this.assertSubmittable(command);
     const money = Money.from(command.money);
@@ -113,6 +153,7 @@ export class ProcessWagerTransactionUseCase {
         return await attempt();
       } catch (error) {
         if (!(error instanceof UniqueViolationError)) throw error;
+        if (attemptNumber < MAX_ATTEMPTS) this.metrics.retried("unique-violation");
         this.logger.info(
           { providerId: command.providerId, walletId: command.walletId, context: error.constraint },
           "concurrent duplicate detected, retrying as replay",

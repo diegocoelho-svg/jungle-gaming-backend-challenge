@@ -14,6 +14,7 @@ import {
   ID_GENERATOR,
   type IdGenerator,
 } from "./application/ports/runtime.port";
+import { WAGERING_METRICS, type WageringMetrics } from "./application/ports/wagering-metrics.port";
 import { WAGERING_UNIT_OF_WORK, type WageringUnitOfWork } from "./application/ports/wagering-unit-of-work.port";
 import { OpenWalletUseCase } from "./application/use-cases/open-wallet.use-case";
 import { ProcessWagerTransactionUseCase } from "./application/use-cases/process-wager-transaction.use-case";
@@ -24,22 +25,32 @@ import { WageringQueries } from "./application/use-cases/wagering-queries.use-ca
 import { SqsEventPublisher } from "./infrastructure/messaging/sqs-event-publisher";
 import { MikroOrmWageringUnitOfWork } from "./infrastructure/persistence/mikro-orm-wagering-unit-of-work";
 import { WAGERING_SCHEMAS } from "./infrastructure/persistence/wagering.schemas";
-import { PrometheusReconciliationMonitor, SystemClock, UuidV7Generator } from "./infrastructure/runtime";
+import {
+  PrometheusReconciliationMonitor,
+  PrometheusWageringMetrics,
+  SystemClock,
+  UuidV7Generator,
+} from "./infrastructure/runtime";
 import type { Registry } from "prom-client";
 import { METRICS_REGISTRY } from "../core/observability/metrics";
 import type { ReconciliationMonitor } from "./application/use-cases/reconcile-wallet.use-case";
 
 const RECONCILIATION_MONITOR = Symbol("RECONCILIATION_MONITOR");
 
-const runtime = [WAGERING_UNIT_OF_WORK, ID_GENERATOR, CLOCK, APPLICATION_LOGGER];
+const runtime = [WAGERING_UNIT_OF_WORK, ID_GENERATOR, CLOCK, APPLICATION_LOGGER, WAGERING_METRICS];
 
 @Module({
   imports: [MikroOrmModule.forFeature(WAGERING_SCHEMAS)],
   providers: [
     {
+      provide: WAGERING_METRICS,
+      inject: [METRICS_REGISTRY],
+      useFactory: (registry: Registry) => new PrometheusWageringMetrics(registry),
+    },
+    {
       provide: WAGERING_UNIT_OF_WORK,
-      inject: [EntityManager],
-      useFactory: (em: EntityManager) => new MikroOrmWageringUnitOfWork(em),
+      inject: [EntityManager, WAGERING_METRICS],
+      useFactory: (em: EntityManager, metrics: WageringMetrics) => new MikroOrmWageringUnitOfWork(em, metrics),
     },
     { provide: ID_GENERATOR, useClass: UuidV7Generator },
     { provide: CLOCK, useClass: SystemClock },
@@ -52,8 +63,13 @@ const runtime = [WAGERING_UNIT_OF_WORK, ID_GENERATOR, CLOCK, APPLICATION_LOGGER]
     {
       provide: ProcessWagerTransactionUseCase,
       inject: runtime,
-      useFactory: (uow: WageringUnitOfWork, ids: IdGenerator, clock: Clock, logger: ApplicationLogger) =>
-        new ProcessWagerTransactionUseCase(uow, ids, clock, logger),
+      useFactory: (
+        uow: WageringUnitOfWork,
+        ids: IdGenerator,
+        clock: Clock,
+        logger: ApplicationLogger,
+        metrics: WageringMetrics,
+      ) => new ProcessWagerTransactionUseCase(uow, ids, clock, logger, metrics),
     },
     {
       provide: OpenWalletUseCase,
@@ -80,15 +96,25 @@ const runtime = [WAGERING_UNIT_OF_WORK, ID_GENERATOR, CLOCK, APPLICATION_LOGGER]
     },
     {
       provide: PublishOutboxUseCase,
-      inject: [WAGERING_UNIT_OF_WORK, EVENT_PUBLISHER, CLOCK, APPLICATION_LOGGER],
-      useFactory: (uow: WageringUnitOfWork, publisher: EventPublisher, clock: Clock, logger: ApplicationLogger) =>
-        new PublishOutboxUseCase(uow, publisher, clock, logger),
+      inject: [WAGERING_UNIT_OF_WORK, EVENT_PUBLISHER, CLOCK, APPLICATION_LOGGER, WAGERING_METRICS],
+      useFactory: (
+        uow: WageringUnitOfWork,
+        publisher: EventPublisher,
+        clock: Clock,
+        logger: ApplicationLogger,
+        metrics: WageringMetrics,
+      ) => new PublishOutboxUseCase(uow, publisher, clock, logger, metrics),
     },
     {
       provide: ResolvePendingReferencesUseCase,
       inject: runtime,
-      useFactory: (uow: WageringUnitOfWork, ids: IdGenerator, clock: Clock, logger: ApplicationLogger) =>
-        new ResolvePendingReferencesUseCase(uow, ids, clock, logger),
+      useFactory: (
+        uow: WageringUnitOfWork,
+        ids: IdGenerator,
+        clock: Clock,
+        logger: ApplicationLogger,
+        metrics: WageringMetrics,
+      ) => new ResolvePendingReferencesUseCase(uow, ids, clock, logger, metrics),
     },
   ],
   exports: [
@@ -100,6 +126,7 @@ const runtime = [WAGERING_UNIT_OF_WORK, ID_GENERATOR, CLOCK, APPLICATION_LOGGER]
     WageringQueries,
     PublishOutboxUseCase,
     ResolvePendingReferencesUseCase,
+    WAGERING_METRICS,
   ],
 })
 export class WageringModule {}

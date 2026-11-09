@@ -95,12 +95,18 @@ services:
     environment:
       <<: *app-env
       APP_ROLE: consumer
+      METRICS_PORT: "9464"
+    ports:
+      - "${CONSUMER_METRICS_PORT:-9464}:9464"
 
   workers:
     <<: *app
     environment:
       <<: *app-env
       APP_ROLE: workers
+      METRICS_PORT: "9464"
+    ports:
+      - "${WORKERS_METRICS_PORT:-9465}:9464"
 
   test:
     profiles: ["test"]

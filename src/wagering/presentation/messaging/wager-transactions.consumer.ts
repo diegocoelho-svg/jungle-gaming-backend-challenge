@@ -14,6 +14,7 @@ import { SQS_CLIENT } from "../../../core/messaging/sqs.client";
 import type { Logger } from "../../../core/observability/logger";
 import { runWithRequestContext } from "../../../core/observability/request-context";
 import { InvalidCommandError, WalletNotFoundError } from "../../application/errors/application.error";
+import { WAGERING_METRICS, type WageringMetrics } from "../../application/ports/wagering-metrics.port";
 import { ProcessWagerTransactionUseCase } from "../../application/use-cases/process-wager-transaction.use-case";
 import { DomainError } from "../../domain/errors/domain.error";
 import { InvalidRequestError } from "../http/request-parsers";
@@ -62,6 +63,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
     @Inject(ENV) private readonly env: Env,
     @Inject(LOGGER) private readonly logger: Logger,
     @Inject(ProcessWagerTransactionUseCase) private readonly processTransaction: ProcessWagerTransactionUseCase,
+    @Inject(WAGERING_METRICS) private readonly metrics: WageringMetrics,
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
@@ -241,6 +243,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
       );
       return "retry";
     }
+    this.metrics.deadLettered(reason);
     await this.acknowledge(message);
     return "dead-lettered";
   }
@@ -249,6 +252,7 @@ export class WagerTransactionsConsumer implements OnApplicationBootstrap, Before
     const receiveCount = Number(message.Attributes?.ApproximateReceiveCount ?? "1");
     const delay = retryDelaySeconds(receiveCount);
     this.logger.warn({ ...fields, err: error, context: `retry-in-${delay}s` }, "transient message failure");
+    this.metrics.retried("message");
     await this.changeVisibility(message, delay);
     return "retry";
   }

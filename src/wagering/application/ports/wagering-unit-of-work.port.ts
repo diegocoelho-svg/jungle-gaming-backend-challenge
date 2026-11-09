@@ -39,8 +39,14 @@ export interface LedgerRepository {
   summarize(walletId: string): Promise<LedgerSummary>;
 }
 
+export interface OutboxBacklog {
+  pending: number;
+  oldestOccurredAt?: Date;
+}
+
 export interface OutboxRepository {
   enqueue(message: OutboxMessage): void;
+  backlog(): Promise<OutboxBacklog>;
   claimDue(now: Date, limit: number): Promise<OutboxMessage[]>;
   save(message: OutboxMessage): void;
 }

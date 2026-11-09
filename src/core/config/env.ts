@@ -4,6 +4,7 @@ export type AppRole = (typeof APP_ROLES)[number];
 export interface Env {
   appRole: AppRole;
   port: number;
+  metricsPort?: number;
   logLevel: string;
   databaseUrl: string;
   dbPoolMax: number;
@@ -72,6 +73,7 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
   const env: Env = {
     appRole: appRole as AppRole,
     port: positiveInt("PORT", 3000),
+    ...(source.METRICS_PORT ? { metricsPort: positiveInt("METRICS_PORT", 9464) } : {}),
     logLevel,
     databaseUrl: required("DATABASE_URL"),
     dbPoolMax: positiveInt("DB_POOL_MAX", 10),

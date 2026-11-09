@@ -5,6 +5,7 @@ import type {
   InboxRepository,
   LedgerRepository,
   LedgerSummary,
+  OutboxBacklog,
   OutboxRepository,
   PendingReferenceClaim,
   TransactionOptions,
@@ -22,7 +23,8 @@ import {
 } from "../../domain/entities/wager-transaction.entity";
 import type { WalletLedgerEntry } from "../../domain/entities/wallet-ledger-entry.entity";
 import type { Wallet } from "../../domain/entities/wallet.entity";
-import { constraintOf, isTransientDatabaseFailure, isUniqueViolation } from "./database-errors";
+import { NO_METRICS, type WageringMetrics } from "../../application/ports/wagering-metrics.port";
+import { constraintOf, isLockConflict, isTransientDatabaseFailure, isUniqueViolation } from "./database-errors";
 import { outboxMessageToDomain, outboxMessageToSchema } from "./mappers/message.mapper";
 import { ledgerEntryToDomain, ledgerEntryToSchema } from "./mappers/wallet-ledger-entry.mapper";
 import { walletToDomain, walletToSchema } from "./mappers/wallet.mapper";
@@ -161,6 +163,18 @@ class MikroOrmOutboxRepository implements OutboxRepository {
     this.em.persist(outboxMessageToSchema(message));
   }
 
+  async backlog(): Promise<OutboxBacklog> {
+    const [row] = await this.em
+      .getConnection()
+      .execute<{ pending: number; oldest: Date | null }[]>(
+        "select count(*)::int as pending, min(occurred_at) as oldest from outbox_messages where published_at is null",
+        [],
+        "all",
+        this.em.getTransactionContext(),
+      );
+    return { pending: row?.pending ?? 0, ...(row?.oldest && { oldestOccurredAt: new Date(row.oldest) }) };
+  }
+
   async claimDue(now: Date, limit: number): Promise<OutboxMessage[]> {
     const rows = await this.em.find(
       OutboxMessageSchema,
@@ -213,14 +227,18 @@ const repositoriesFor = (em: EntityManager): WageringRepositories => ({
   inbox: new MikroOrmInboxRepository(em),
 });
 
-function translate(error: unknown): unknown {
+function translate(error: unknown, metrics: WageringMetrics): unknown {
   if (isUniqueViolation(error)) return new UniqueViolationError(constraintOf(error));
+  if (isLockConflict(error)) metrics.lockConflict();
   if (isTransientDatabaseFailure(error)) return new TransientFailureError("Database temporarily unavailable");
   return error;
 }
 
 export class MikroOrmWageringUnitOfWork implements WageringUnitOfWork {
-  constructor(private readonly em: EntityManager) {}
+  constructor(
+    private readonly em: EntityManager,
+    private readonly metrics: WageringMetrics = NO_METRICS,
+  ) {}
 
   async transaction<T>(
     work: (repositories: WageringRepositories) => Promise<T>,
@@ -237,7 +255,7 @@ export class MikroOrmWageringUnitOfWork implements WageringUnitOfWork {
         options.consistentSnapshot ? { isolationLevel: IsolationLevel.REPEATABLE_READ, readOnly: true } : {},
       );
     } catch (error) {
-      throw translate(error);
+      throw translate(error, this.metrics);
     }
   }
 
@@ -245,7 +263,7 @@ export class MikroOrmWageringUnitOfWork implements WageringUnitOfWork {
     try {
       return await work(repositoriesFor(this.em.fork()));
     } catch (error) {
-      throw translate(error);
+      throw translate(error, this.metrics);
     }
   }
 }

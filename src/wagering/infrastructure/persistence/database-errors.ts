@@ -37,6 +37,13 @@ export function isUniqueViolation(error: unknown): boolean {
   return sqlStateOf(error) === "23505";
 }
 
+const LOCK_CONFLICT_SQL_STATES = new Set(["55P03", "40P01"]);
+
+export function isLockConflict(error: unknown): boolean {
+  const state = sqlStateOf(error);
+  return state !== undefined && LOCK_CONFLICT_SQL_STATES.has(state);
+}
+
 export function isTransientDatabaseFailure(error: unknown): boolean {
   const state = sqlStateOf(error);
   if (state && (TRANSIENT_SQL_STATES.has(state) || state.startsWith("08"))) return true;

@@ -10,6 +10,7 @@ export interface SqsProxy {
   readonly endpoint: string;
   hold(action: SqsAction, options?: { forwardFirst?: boolean }): Promise<void>;
   calls(action: SqsAction): number;
+  outage(down: boolean): void;
   stop(): void;
 }
 
@@ -17,6 +18,7 @@ const actionOf = (request: Request): string => request.headers.get("x-amz-target
 
 export function startSqsProxy(upstream: string): SqsProxy {
   const holds: Hold[] = [];
+  let down = false;
   const seen = new Map<string, number>();
   const never = new Promise<Response>(() => undefined);
 
@@ -38,6 +40,7 @@ export function startSqsProxy(upstream: string): SqsProxy {
       const action = actionOf(request);
       seen.set(action, (seen.get(action) ?? 0) + 1);
       const body = await request.arrayBuffer();
+      if (down) return new Response("Service Unavailable", { status: 503 });
       const index = holds.findIndex((hold) => hold.action === action);
       if (index === -1) return forward(request, body);
 
@@ -56,6 +59,9 @@ export function startSqsProxy(upstream: string): SqsProxy {
       });
     },
     calls: (action) => seen.get(action) ?? 0,
+    outage: (value) => {
+      down = value;
+    },
     stop: () => server.stop(true),
   };
 }
